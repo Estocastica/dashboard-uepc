@@ -26,7 +26,6 @@ app.add_middleware(
 )
 
 URL_SIMULADOR = "https://portal2.uepc.org.ar/nuevosimulador2017/Default.aspx"
-CONCURRENCIA = 1
 IPC_CACHE_FILE = os.path.join(BASE_DIR, "ipc_pampeana_cache.csv")
 PRECIOS_CACHE_FILE = os.path.join(BASE_DIR, "precios_indec_pampeana_cache.json")
 IPC_SERIES_IDS = ["145.3_INGPAMANA_DICI_M_15", "148.3_INIVELANA_DICI_M_26"]
@@ -518,7 +517,7 @@ async def cerrar_modal_bienvenida(page: Page):
         btn_continuar = page.locator("button:has-text('Continuar'), input[value*='Continuar' i], a:has-text('Continuar')")
         if await btn_continuar.count() > 0 and await btn_continuar.first.is_visible():
             await btn_continuar.first.click()
-            await page.wait_for_timeout(80)
+            await page.wait_for_timeout(120)
     except Exception:
         pass
 
@@ -549,14 +548,14 @@ async def ejecutar_cambio_aspnet(page: Page, control_id: str, valor: str, forzar
         try:
             async with page.expect_response(
                 lambda r: "default.aspx" in r.url.lower() and r.request.method == "POST",
-                timeout=8000
+                timeout=12000
             ):
                 await loc.select_option(value=str(valor), force=True)
         except Exception:
-            await page.wait_for_timeout(120)
+            await page.wait_for_timeout(200)
     else:
         await loc.select_option(value=str(valor), force=True)
-        await page.wait_for_timeout(80)
+        await page.wait_for_timeout(120)
 
     try:
         await page.wait_for_function(
@@ -567,7 +566,7 @@ async def ejecutar_cambio_aspnet(page: Page, control_id: str, valor: str, forzar
                 }
                 return document.readyState === 'complete';
             }""",
-            timeout=5000
+            timeout=8000
         )
     except Exception:
         pass
@@ -683,9 +682,9 @@ class SimuladorSession:
                 raise
 
         if self.page is None or self.page.is_closed():
-            self.page = await self.browser.new_page(viewport={"width": 1280, "height": 720})
+            self.page = await self.browser.new_page(viewport={"width": 1366, "height": 900})
             await optimizar_carga_pagina(self.page)
-            await self.page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=45000)
+            await self.page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=60000)
             await cerrar_modal_bienvenida(self.page)
             await asegurar_propuesta_y_mes_activos(self.page)
 
@@ -893,7 +892,7 @@ async def interactuar_control(payload: Dict[str, Any]):
                 loc = page.locator(f"#{control_id}")
                 if await loc.count() > 0:
                     await loc.set_checked(bool(valor))
-                    await page.wait_for_timeout(80)
+                    await page.wait_for_timeout(120)
             else:
                 loc = page.locator(f"#{control_id}")
                 if await loc.count() > 0:
@@ -929,14 +928,14 @@ async def rellenar_input_aspnet(page: Page, loc, val_str: str):
 
     if actual_val.get("visible"):
         try:
-            await loc.fill(val_str, timeout=2000)
+            await loc.fill(val_str, timeout=2500)
         except Exception:
             pass
 
     try:
         async with page.expect_response(
             lambda r: "default.aspx" in r.url.lower() and r.request.method == "POST",
-            timeout=4500
+            timeout=5000
         ):
             if actual_val.get("visible"):
                 try:
@@ -944,7 +943,7 @@ async def rellenar_input_aspnet(page: Page, loc, val_str: str):
                 except Exception:
                     pass
     except Exception:
-        await page.wait_for_timeout(100)
+        await page.wait_for_timeout(120)
 
 
 async def buscar_control_horas_cargo1(page: Page):
@@ -1031,7 +1030,7 @@ async def aplicar_parametros_lista(page: Page, parametros: List[Dict[str, Any]])
             actual_chk = await loc.is_checked()
             if actual_chk != bool(p_val):
                 await loc.set_checked(bool(p_val))
-                await page.wait_for_timeout(80)
+                await page.wait_for_timeout(100)
 
         else:
             val_str = str(p_val).strip()
@@ -1117,7 +1116,7 @@ async def ejecutar_barrido(request: Request, params: str):
 
     async def event_generator():
         async with sesion._get_lock():
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Liberando memoria de sesión previa...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Preparando sesión secuencial...'})}\n\n"
             await sesion.asegurar_sesion(forzar_recarga=False)
             base_page = sesion.page
 
@@ -1129,7 +1128,6 @@ async def ejecutar_barrido(request: Request, params: str):
                     .map((o, i) => ({{ value: o.value, text: o.text.trim(), dom_idx: i }}));
             }}""")
 
-            # Cerramos la sesión persistente antes de abrir el navegador del barrido para no duplicar RAM
             await sesion.limpiar()
 
             propuestas = [{**p, "inicio": parsear_inicio_propuesta(p["text"])} for p in propuestas_raw]
@@ -1169,11 +1167,11 @@ async def ejecutar_barrido(request: Request, params: str):
             page_b: Optional[Page] = None
 
             try:
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Iniciando navegador en modo bajo consumo de RAM...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Abriendo simulador UEPC en modo secuencial...'})}\n\n"
                 browser_b = await pw_b.chromium.launch(headless=True, args=CHROMIUM_ARGS)
-                page_b = await browser_b.new_page(viewport={"width": 1280, "height": 720})
+                page_b = await browser_b.new_page(viewport={"width": 1366, "height": 900})
                 await optimizar_carga_pagina(page_b)
-                await page_b.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=45000)
+                await page_b.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=60000)
                 await cerrar_modal_bienvenida(page_b)
 
                 for idx, prop in enumerate(propuestas_filtradas, start=1):
@@ -1191,7 +1189,7 @@ async def ejecutar_barrido(request: Request, params: str):
                                 limite_siguiente = sig["inicio"]
                                 break
 
-                    yield f"data: {json.dumps({'type': 'status', 'message': f'Consultando ({idx}/{total}): {prop_text}'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'Propuesta {idx}/{total}: {prop_text}'})}\n\n"
 
                     try:
                         await ejecutar_cambio_aspnet(page_b, propuesta_id, prop_val)
