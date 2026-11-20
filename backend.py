@@ -8,7 +8,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from playwright.async_api import async_playwright, Browser, Page, Playwright
 
 if sys.platform.startswith("win"):
@@ -173,11 +173,14 @@ def cargar_ipc_pampeana() -> Tuple[Dict[str, float], str]:
                         serie[ym] = float(fila[1])
             if "2026-10" in serie:
                 origen = f"INDEC API oficial ({sid})"
-                with open(IPC_CACHE_FILE, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["periodo", "ipc"])
-                    for k in sorted(serie.keys()):
-                        writer.writerow([k, serie[k]])
+                try:
+                    with open(IPC_CACHE_FILE, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(["periodo", "ipc"])
+                        for k in sorted(serie.keys()):
+                            writer.writerow([k, serie[k]])
+                except Exception:
+                    pass
                 break
         except Exception:
             continue
@@ -261,13 +264,16 @@ def cargar_precios_medios_pampeana() -> Dict[str, Any]:
 
         if precios_detectados:
             origen = "INDEC oficial (sh_ipc_precios_promedio.xls — Región Pampeana)"
-            with open(PRECIOS_CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(
-                    {"origen": origen, "periodo": periodo_detectado, "precios": precios_detectados},
-                    f,
-                    ensure_ascii=False,
-                    indent=2
-                )
+            try:
+                with open(PRECIOS_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {"origen": origen, "periodo": periodo_detectado, "precios": precios_detectados},
+                        f,
+                        ensure_ascii=False,
+                        indent=2
+                    )
+            except Exception:
+                pass
     except Exception:
         if os.path.exists(PRECIOS_CACHE_FILE):
             try:
@@ -487,7 +493,7 @@ def siguiente_mes(anio: int, mes: int) -> Tuple[int, int]:
 
 async def optimizar_carga_pagina(page: Page):
     async def interceptar(route):
-        if route.request.resource_type in ("image", "font", "media"):
+        if route.request.resource_type in ("image", "font", "media", "stylesheet"):
             await route.abort()
             return
         await route.continue_()
@@ -500,7 +506,7 @@ async def cerrar_modal_bienvenida(page: Page):
         btn_continuar = page.locator("button:has-text('Continuar'), input[value*='Continuar' i], a:has-text('Continuar')")
         if await btn_continuar.count() > 0 and await btn_continuar.first.is_visible():
             await btn_continuar.first.click()
-            await page.wait_for_timeout(80)
+            await page.wait_for_timeout(50)
     except Exception:
         pass
 
@@ -531,14 +537,14 @@ async def ejecutar_cambio_aspnet(page: Page, control_id: str, valor: str, forzar
         try:
             async with page.expect_response(
                 lambda r: "default.aspx" in r.url.lower() and r.request.method == "POST",
-                timeout=12000
+                timeout=5000
             ):
                 await loc.select_option(value=str(valor), force=True)
         except Exception:
-            pass
+            await page.wait_for_timeout(120)
     else:
         await loc.select_option(value=str(valor), force=True)
-        await page.wait_for_timeout(120)
+        await page.wait_for_timeout(50)
 
     try:
         await page.wait_for_function(
@@ -549,7 +555,7 @@ async def ejecutar_cambio_aspnet(page: Page, control_id: str, valor: str, forzar
                 }
                 return document.readyState === 'complete';
             }""",
-            timeout=10000
+            timeout=3000
         )
     except Exception:
         pass
@@ -633,34 +639,51 @@ class SimuladorSession:
         self.pw: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
-        self.lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    async def limpiar(self):
+        for obj, fn in ((self.page, "close"), (self.browser, "close"), (self.pw, "stop")):
+            if obj is not None:
+                try:
+                    await getattr(obj, fn)()
+                except Exception:
+                    pass
+        self.page = None
+        self.browser = None
+        self.pw = None
 
     async def asegurar_sesion(self, forzar_recarga: bool = False):
-        if self.pw is None:
+        if forzar_recarga or self.pw is None or self.browser is None:
+            await self.limpiar()
             self.pw = await async_playwright().start()
-            self.browser = await self.pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"]
-            )
-            self.page = await self.browser.new_page(viewport={"width": 1366, "height": 900})
+            try:
+                self.browser = await self.pw.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-zygote"
+                    ]
+                )
+            except Exception:
+                await self.limpiar()
+                raise
+
+        if self.page is None or self.page.is_closed():
+            self.page = await self.browser.new_page(viewport={"width": 1280, "height": 800})
             await optimizar_carga_pagina(self.page)
-            await self.page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=60000)
-            await cerrar_modal_bienvenida(self.page)
-            await asegurar_propuesta_y_mes_activos(self.page)
-        elif forzar_recarga or self.page is None or self.page.is_closed():
-            if self.page and not self.page.is_closed():
-                await self.page.close()
-            self.page = await self.browser.new_page(viewport={"width": 1366, "height": 900})
-            await optimizar_carga_pagina(self.page)
-            await self.page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=60000)
+            await self.page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=45000)
             await cerrar_modal_bienvenida(self.page)
             await asegurar_propuesta_y_mes_activos(self.page)
 
     async def cerrar(self):
-        if self.browser:
-            await self.browser.close()
-        if self.pw:
-            await self.pw.stop()
+        await self.limpiar()
 
 
 sesion = SimuladorSession()
@@ -820,20 +843,27 @@ async def serve_ui():
 
 @app.get("/api/estado-dom")
 async def get_estado_dom(reset: bool = False):
-    async with sesion.lock:
-        await sesion.asegurar_sesion(forzar_recarga=reset)
-        await cerrar_modal_bienvenida(sesion.page)
-        await asegurar_propuesta_y_mes_activos(sesion.page)
-        estado = await inspeccionar_dom_completo(sesion.page)
-        return {
-            "status": "ok",
-            "estado": estado,
-            "canasta_bienes": CANASTA_BIENES_PAMPEANA,
-            "ipc_info": {
-                "origen": IPC_ORIGEN or "No disponible",
-                "ipc_2026_10": IPC_PAMPEANA.get("2026-10")
+    async with sesion._get_lock():
+        try:
+            await sesion.asegurar_sesion(forzar_recarga=reset)
+            await cerrar_modal_bienvenida(sesion.page)
+            await asegurar_propuesta_y_mes_activos(sesion.page)
+            estado = await inspeccionar_dom_completo(sesion.page)
+            return {
+                "status": "ok",
+                "estado": estado,
+                "canasta_bienes": CANASTA_BIENES_PAMPEANA,
+                "ipc_info": {
+                    "origen": IPC_ORIGEN or "No disponible",
+                    "ipc_2026_10": IPC_PAMPEANA.get("2026-10")
+                }
             }
-        }
+        except Exception as exc:
+            await sesion.limpiar()
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "detail": str(exc)}
+            )
 
 
 @app.post("/api/interactuar")
@@ -842,27 +872,33 @@ async def interactuar_control(payload: Dict[str, Any]):
     tag = payload.get("tag")
     valor = payload.get("value")
 
-    async with sesion.lock:
-        await sesion.asegurar_sesion(forzar_recarga=False)
-        page = sesion.page
-        await cerrar_modal_bienvenida(page)
-        await asegurar_propuesta_y_mes_activos(page)
-
-        if tag == "select":
-            await ejecutar_cambio_aspnet(page, control_id, str(valor), forzar=True)
+    async with sesion._get_lock():
+        try:
+            await sesion.asegurar_sesion(forzar_recarga=False)
+            page = sesion.page
+            await cerrar_modal_bienvenida(page)
             await asegurar_propuesta_y_mes_activos(page)
-        elif tag == "checkbox":
-            loc = page.locator(f"#{control_id}")
-            if await loc.count() > 0:
-                await loc.set_checked(bool(valor))
-                await page.wait_for_timeout(120)
-        else:
-            loc = page.locator(f"#{control_id}")
-            if await loc.count() > 0:
-                await rellenar_input_aspnet(page, loc, str(valor))
 
-        estado = await inspeccionar_dom_completo(page)
-        return {"status": "ok", "estado": estado}
+            if tag == "select":
+                await ejecutar_cambio_aspnet(page, control_id, str(valor), forzar=True)
+                await asegurar_propuesta_y_mes_activos(page)
+            elif tag == "checkbox":
+                loc = page.locator(f"#{control_id}")
+                if await loc.count() > 0:
+                    await loc.set_checked(bool(valor))
+                    await page.wait_for_timeout(80)
+            else:
+                loc = page.locator(f"#{control_id}")
+                if await loc.count() > 0:
+                    await rellenar_input_aspnet(page, loc, str(valor))
+
+            estado = await inspeccionar_dom_completo(page)
+            return {"status": "ok", "estado": estado}
+        except Exception as exc:
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "detail": str(exc)}
+            )
 
 
 async def rellenar_input_aspnet(page: Page, loc, val_str: str):
@@ -879,11 +915,11 @@ async def rellenar_input_aspnet(page: Page, loc, val_str: str):
     try:
         async with page.expect_response(
             lambda r: "default.aspx" in r.url.lower() and r.request.method == "POST",
-            timeout=6000
+            timeout=4000
         ):
             await loc.press("Tab")
     except Exception:
-        await page.wait_for_timeout(150)
+        await page.wait_for_timeout(100)
 
 
 async def buscar_control_horas_cargo1(page: Page):
@@ -970,7 +1006,7 @@ async def aplicar_parametros_lista(page: Page, parametros: List[Dict[str, Any]])
             actual_chk = await loc.is_checked()
             if actual_chk != bool(p_val):
                 await loc.set_checked(bool(p_val))
-                await page.wait_for_timeout(120)
+                await page.wait_for_timeout(80)
 
         else:
             val_str = str(p_val).strip()
@@ -1055,7 +1091,7 @@ async def ejecutar_barrido(request: Request, params: str):
     otros_params = [p for p in parametros_cargo1 if p not in param_cargo]
 
     async def event_generator():
-        async with sesion.lock:
+        async with sesion._get_lock():
             await sesion.asegurar_sesion(forzar_recarga=False)
             browser = sesion.browser
             base_page = sesion.page
@@ -1120,7 +1156,7 @@ async def ejecutar_barrido(request: Request, params: str):
                 page = await ctx.new_page()
                 await optimizar_carga_pagina(page)
                 try:
-                    await page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=60000)
+                    await page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=45000)
                     await cerrar_modal_bienvenida(page)
 
                     while not cola_tareas.empty():
@@ -1228,6 +1264,11 @@ async def ejecutar_barrido(request: Request, params: str):
                                 "propuesta": prop_text,
                                 "error": str(exc)
                             })
+                            try:
+                                await page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=35000)
+                                await cerrar_modal_bienvenida(page)
+                            except Exception:
+                                pass
                 finally:
                     await ctx.close()
 
