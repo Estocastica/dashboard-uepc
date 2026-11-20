@@ -26,7 +26,7 @@ app.add_middleware(
 )
 
 URL_SIMULADOR = "https://portal2.uepc.org.ar/nuevosimulador2017/Default.aspx"
-CONCURRENCIA = 1
+CONCURRENCIA = 4  # Cantidad de pestañas/contextos en paralelo (recomendado: 3 a 5)
 IPC_CACHE_FILE = os.path.join(BASE_DIR, "ipc_pampeana_cache.csv")
 PRECIOS_CACHE_FILE = os.path.join(BASE_DIR, "precios_indec_pampeana_cache.json")
 IPC_SERIES_IDS = ["145.3_INGPAMANA_DICI_M_15", "148.3_INIVELANA_DICI_M_26"]
@@ -1157,6 +1157,7 @@ async def ejecutar_barrido(request: Request, params: str):
             resultados: List[Dict[str, Any]] = []
             progreso_contador = 0
             lock_res = asyncio.Lock()
+            semaforo = asyncio.Semaphore(CONCURRENCIA)
             ipc_base_oct26 = IPC_PAMPEANA.get("2026-10")
 
             def calcular_real_puntual(salario_str: str, ym: str) -> str:
@@ -1170,60 +1171,92 @@ async def ejecutar_barrido(request: Request, params: str):
 
             async def worker():
                 nonlocal progreso_contador
-                ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
-                page = await ctx.new_page()
-                await optimizar_carga_pagina(page)
+                ctx = None
+                page = None
                 try:
-                    await page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=60000)
-                    await cerrar_modal_bienvenida(page)
+                    async with semaforo:
+                        ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
+                        page = await ctx.new_page()
+                        await optimizar_carga_pagina(page)
+                        await page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=60000)
+                        await cerrar_modal_bienvenida(page)
 
-                    while not cola_tareas.empty():
-                        if await request.is_disconnected():
-                            break
-                        try:
-                            idx, prop, limite_siguiente = cola_tareas.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
+                        while not cola_tareas.empty():
+                            if await request.is_disconnected():
+                                break
+                            try:
+                                idx, prop, limite_siguiente = cola_tareas.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
 
-                        prop_val = prop["value"]
-                        prop_text = prop["text"]
-                        inicio = prop["inicio"]
+                            prop_val = prop["value"]
+                            prop_text = prop["text"]
+                            inicio = prop["inicio"]
 
-                        try:
-                            await ejecutar_cambio_aspnet(page, propuesta_id, prop_val)
-                            await aplicar_parametros_lista(page, param_cargo)
+                            try:
+                                await ejecutar_cambio_aspnet(page, propuesta_id, prop_val)
+                                await aplicar_parametros_lista(page, param_cargo)
 
-                            info = await obtener_info_propuesta_y_mes(page)
-                            sub_meses = info.get("mes")
+                                info = await obtener_info_propuesta_y_mes(page)
+                                sub_meses = info.get("mes")
 
-                            if inicio is not None and sub_meses and sub_meses["opciones"]:
-                                cur_y, cur_m = inicio
-                                salario_inicial_prop = None
+                                if inicio is not None and sub_meses and sub_meses["opciones"]:
+                                    cur_y, cur_m = inicio
+                                    salario_inicial_prop = None
 
-                                for paso in range(12):
-                                    if paso > 0 and limite_siguiente is not None and (cur_y, cur_m) >= limite_siguiente:
-                                        break
-                                    if paso > 0 and limite_siguiente is None and cur_y > inicio[0] and cur_m > 3:
-                                        break
+                                    for paso in range(12):
+                                        if paso > 0 and limite_siguiente is not None and (cur_y, cur_m) >= limite_siguiente:
+                                            break
+                                        if paso > 0 and limite_siguiente is None and cur_y > inicio[0] and cur_m > 3:
+                                            break
 
-                                    opt_mes = buscar_opcion_mes_en_selector(sub_meses["opciones"], cur_m)
-                                    if not opt_mes:
-                                        break
+                                        opt_mes = buscar_opcion_mes_en_selector(sub_meses["opciones"], cur_m)
+                                        if not opt_mes:
+                                            break
 
-                                    await ejecutar_cambio_aspnet(page, sub_meses["id"], opt_mes["value"])
+                                        await ejecutar_cambio_aspnet(page, sub_meses["id"], opt_mes["value"])
+                                        await aplicar_parametros_lista(page, otros_params)
+                                        salario = await leer_salario_total_bolsillo(page)
+
+                                        if paso == 0:
+                                            salario_inicial_prop = salario
+                                        elif limite_siguiente is None and cur_y > inicio[0] and salario == salario_inicial_prop:
+                                            break
+
+                                        nombre_mes = NOMBRES_MESES[cur_m]
+                                        sort_key = f"{cur_y:04d}-{cur_m:02d}"
+                                        registro = {
+                                            "orden_dom": idx * 100 + paso,
+                                            "propuesta": f"{prop_text} ({nombre_mes})",
+                                            "fecha": f"{nombre_mes} {cur_y}",
+                                            "sort_key": sort_key,
+                                            "tiene_fecha": True,
+                                            "salario": salario,
+                                            "salario_real": calcular_real_puntual(salario, sort_key)
+                                        }
+                                        async with lock_res:
+                                            resultados.append(registro)
+                                            progreso_contador += 1
+                                            p_actual = min(progreso_contador, total)
+                                        if sort_key >= "2023-01":
+                                            await cola_eventos.put({
+                                                "type": "progress",
+                                                "idx": p_actual,
+                                                "total": total,
+                                                "registro": registro
+                                            })
+
+                                        cur_y, cur_m = siguiente_mes(cur_y, cur_m)
+
+                                elif inicio is not None:
                                     await aplicar_parametros_lista(page, otros_params)
                                     salario = await leer_salario_total_bolsillo(page)
-
-                                    if paso == 0:
-                                        salario_inicial_prop = salario
-                                    elif limite_siguiente is None and cur_y > inicio[0] and salario == salario_inicial_prop:
-                                        break
-
+                                    cur_y, cur_m = inicio
                                     nombre_mes = NOMBRES_MESES[cur_m]
                                     sort_key = f"{cur_y:04d}-{cur_m:02d}"
                                     registro = {
-                                        "orden_dom": idx * 100 + paso,
-                                        "propuesta": f"{prop_text} ({nombre_mes})",
+                                        "orden_dom": idx * 100,
+                                        "propuesta": prop_text,
                                         "fecha": f"{nombre_mes} {cur_y}",
                                         "sort_key": sort_key,
                                         "tiene_fecha": True,
@@ -1242,48 +1275,28 @@ async def ejecutar_barrido(request: Request, params: str):
                                             "registro": registro
                                         })
 
-                                    cur_y, cur_m = siguiente_mes(cur_y, cur_m)
-
-                            elif inicio is not None:
-                                await aplicar_parametros_lista(page, otros_params)
-                                salario = await leer_salario_total_bolsillo(page)
-                                cur_y, cur_m = inicio
-                                nombre_mes = NOMBRES_MESES[cur_m]
-                                sort_key = f"{cur_y:04d}-{cur_m:02d}"
-                                registro = {
-                                    "orden_dom": idx * 100,
-                                    "propuesta": prop_text,
-                                    "fecha": f"{nombre_mes} {cur_y}",
-                                    "sort_key": sort_key,
-                                    "tiene_fecha": True,
-                                    "salario": salario,
-                                    "salario_real": calcular_real_puntual(salario, sort_key)
-                                }
+                            except Exception as exc:
                                 async with lock_res:
-                                    resultados.append(registro)
                                     progreso_contador += 1
                                     p_actual = min(progreso_contador, total)
-                                if sort_key >= "2023-01":
-                                    await cola_eventos.put({
-                                        "type": "progress",
-                                        "idx": p_actual,
-                                        "total": total,
-                                        "registro": registro
-                                    })
-
-                        except Exception as exc:
-                            async with lock_res:
-                                progreso_contador += 1
-                                p_actual = min(progreso_contador, total)
-                            await cola_eventos.put({
-                                "type": "error",
-                                "idx": p_actual,
-                                "total": total,
-                                "propuesta": prop_text,
-                                "error": str(exc)
-                            })
+                                await cola_eventos.put({
+                                    "type": "error",
+                                    "idx": p_actual,
+                                    "total": total,
+                                    "propuesta": prop_text,
+                                    "error": str(exc)
+                                })
                 finally:
-                    await ctx.close()
+                    if page is not None:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
+                    if ctx is not None:
+                        try:
+                            await ctx.close()
+                        except Exception:
+                            pass
 
             num_workers = min(CONCURRENCIA, max(1, total))
             tareas_workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
