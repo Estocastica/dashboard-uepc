@@ -32,6 +32,18 @@ PRECIOS_CACHE_FILE = os.path.join(BASE_DIR, "precios_indec_pampeana_cache.json")
 IPC_SERIES_IDS = ["145.3_INGPAMANA_DICI_M_15", "148.3_INIVELANA_DICI_M_26"]
 URL_PRECIOS_INDEC_XLS = "https://www.indec.gob.ar/ftp/cuadros/economia/sh_ipc_precios_promedio.xls"
 
+CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--no-zygote",
+    "--single-process",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-setuid-sandbox",
+    "--js-flags=--max-old-space-size=192",
+]
+
 MESES_ES = {
     "enero": 1, "ene": 1,
     "febrero": 2, "feb": 2,
@@ -646,15 +658,6 @@ class SimuladorSession:
             self._lock = asyncio.Lock()
         return self._lock
 
-    async def cerrar_pagina_activa(self):
-        if self.page is not None:
-            try:
-                if not self.page.is_closed():
-                    await self.page.close()
-            except Exception:
-                pass
-            self.page = None
-
     async def limpiar(self):
         for obj, fn in ((self.page, "close"), (self.browser, "close"), (self.pw, "stop")):
             if obj is not None:
@@ -673,19 +676,14 @@ class SimuladorSession:
             try:
                 self.browser = await self.pw.chromium.launch(
                     headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                        "--no-zygote"
-                    ]
+                    args=CHROMIUM_ARGS
                 )
             except Exception:
                 await self.limpiar()
                 raise
 
         if self.page is None or self.page.is_closed():
-            self.page = await self.browser.new_page(viewport={"width": 1366, "height": 900})
+            self.page = await self.browser.new_page(viewport={"width": 1280, "height": 720})
             await optimizar_carga_pagina(self.page)
             await self.page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=45000)
             await cerrar_modal_bienvenida(self.page)
@@ -1119,9 +1117,8 @@ async def ejecutar_barrido(request: Request, params: str):
 
     async def event_generator():
         async with sesion._get_lock():
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Preparando navegador para el barrido...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Liberando memoria de sesión previa...'})}\n\n"
             await sesion.asegurar_sesion(forzar_recarga=False)
-            browser = sesion.browser
             base_page = sesion.page
 
             propuestas_raw = await base_page.evaluate(f"""() => {{
@@ -1132,7 +1129,8 @@ async def ejecutar_barrido(request: Request, params: str):
                     .map((o, i) => ({{ value: o.value, text: o.text.trim(), dom_idx: i }}));
             }}""")
 
-            await sesion.cerrar_pagina_activa()
+            # Cerramos la sesión persistente antes de abrir el navegador del barrido para no duplicar RAM
+            await sesion.limpiar()
 
             propuestas = [{**p, "inicio": parsear_inicio_propuesta(p["text"])} for p in propuestas_raw]
             propuestas_ordenadas = sorted(
@@ -1154,21 +1152,7 @@ async def ejecutar_barrido(request: Request, params: str):
             total = len(propuestas_filtradas)
             yield f"data: {json.dumps({'type': 'total', 'total': total})}\n\n"
 
-            cola_eventos: asyncio.Queue = asyncio.Queue()
-            cola_tareas: asyncio.Queue = asyncio.Queue()
-
-            for idx, prop in enumerate(propuestas_filtradas, start=1):
-                limite_sig: Optional[Tuple[int, int]] = None
-                if prop["inicio"] is not None:
-                    for sig in propuestas_filtradas[idx:]:
-                        if sig["inicio"] is not None and sig["inicio"] > prop["inicio"]:
-                            limite_sig = sig["inicio"]
-                            break
-                cola_tareas.put_nowait((idx, prop, limite_sig))
-
             resultados: List[Dict[str, Any]] = []
-            progreso_contador = 0
-            lock_res = asyncio.Lock()
             ipc_base_oct26 = IPC_PAMPEANA.get("2026-10")
 
             def calcular_real_puntual(salario_str: str, ym: str) -> str:
@@ -1180,145 +1164,130 @@ async def ejecutar_barrido(request: Request, params: str):
                     pass
                 return "N/D"
 
-            async def worker():
-                nonlocal progreso_contador
-                ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
-                page = await ctx.new_page()
-                await optimizar_carga_pagina(page)
-                try:
-                    await cola_eventos.put({"type": "status", "message": "Abriendo simulador UEPC en el worker..."})
-                    await page.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=45000)
-                    await cerrar_modal_bienvenida(page)
+            pw_b = await async_playwright().start()
+            browser_b: Optional[Browser] = None
+            page_b: Optional[Page] = None
 
-                    while not cola_tareas.empty():
-                        if await request.is_disconnected():
-                            break
-                        try:
-                            idx, prop, limite_siguiente = cola_tareas.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
+            try:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Iniciando navegador en modo bajo consumo de RAM...'})}\n\n"
+                browser_b = await pw_b.chromium.launch(headless=True, args=CHROMIUM_ARGS)
+                page_b = await browser_b.new_page(viewport={"width": 1280, "height": 720})
+                await optimizar_carga_pagina(page_b)
+                await page_b.goto(URL_SIMULADOR, wait_until="domcontentloaded", timeout=45000)
+                await cerrar_modal_bienvenida(page_b)
 
-                        prop_val = prop["value"]
-                        prop_text = prop["text"]
-                        inicio = prop["inicio"]
+                for idx, prop in enumerate(propuestas_filtradas, start=1):
+                    if await request.is_disconnected():
+                        break
 
-                        await cola_eventos.put({
-                            "type": "status",
-                            "message": f"Consultando ({idx}/{total}): {prop_text}"
-                        })
+                    prop_val = prop["value"]
+                    prop_text = prop["text"]
+                    inicio = prop["inicio"]
 
-                        try:
-                            await ejecutar_cambio_aspnet(page, propuesta_id, prop_val)
-                            await aplicar_parametros_lista(page, param_cargo)
+                    limite_siguiente: Optional[Tuple[int, int]] = None
+                    if inicio is not None:
+                        for sig in propuestas_filtradas[idx:]:
+                            if sig["inicio"] is not None and sig["inicio"] > inicio:
+                                limite_siguiente = sig["inicio"]
+                                break
 
-                            info = await obtener_info_propuesta_y_mes(page)
-                            sub_meses = info.get("mes")
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'Consultando ({idx}/{total}): {prop_text}'})}\n\n"
 
-                            if inicio is not None and sub_meses and sub_meses["opciones"]:
-                                cur_y, cur_m = inicio
-                                salario_inicial_prop = None
+                    try:
+                        await ejecutar_cambio_aspnet(page_b, propuesta_id, prop_val)
+                        await aplicar_parametros_lista(page_b, param_cargo)
 
-                                for paso in range(12):
-                                    if paso > 0 and limite_siguiente is not None and (cur_y, cur_m) >= limite_siguiente:
-                                        break
-                                    if paso > 0 and limite_siguiente is None and cur_y > inicio[0] and cur_m > 3:
-                                        break
+                        info = await obtener_info_propuesta_y_mes(page_b)
+                        sub_meses = info.get("mes")
 
-                                    opt_mes = buscar_opcion_mes_en_selector(sub_meses["opciones"], cur_m)
-                                    if not opt_mes:
-                                        break
+                        if inicio is not None and sub_meses and sub_meses["opciones"]:
+                            cur_y, cur_m = inicio
+                            salario_inicial_prop = None
 
-                                    await ejecutar_cambio_aspnet(page, sub_meses["id"], opt_mes["value"])
-                                    await aplicar_parametros_lista(page, otros_params)
-                                    salario = await leer_salario_total_bolsillo(page)
+                            for paso in range(12):
+                                if paso > 0 and limite_siguiente is not None and (cur_y, cur_m) >= limite_siguiente:
+                                    break
+                                if paso > 0 and limite_siguiente is None and cur_y > inicio[0] and cur_m > 3:
+                                    break
 
-                                    if paso == 0:
-                                        salario_inicial_prop = salario
-                                    elif limite_siguiente is None and cur_y > inicio[0] and salario == salario_inicial_prop:
-                                        break
+                                opt_mes = buscar_opcion_mes_en_selector(sub_meses["opciones"], cur_m)
+                                if not opt_mes:
+                                    break
 
-                                    nombre_mes = NOMBRES_MESES[cur_m]
-                                    sort_key = f"{cur_y:04d}-{cur_m:02d}"
-                                    registro = {
-                                        "orden_dom": idx * 100 + paso,
-                                        "propuesta": f"{prop_text} ({nombre_mes})",
-                                        "fecha": f"{nombre_mes} {cur_y}",
-                                        "sort_key": sort_key,
-                                        "tiene_fecha": True,
-                                        "salario": salario,
-                                        "salario_real": calcular_real_puntual(salario, sort_key)
-                                    }
-                                    async with lock_res:
-                                        resultados.append(registro)
-                                        progreso_contador += 1
-                                        p_actual = min(progreso_contador, total)
-                                    if sort_key >= "2023-01":
-                                        await cola_eventos.put({
-                                            "type": "progress",
-                                            "idx": p_actual,
-                                            "total": total,
-                                            "registro": registro
-                                        })
+                                await ejecutar_cambio_aspnet(page_b, sub_meses["id"], opt_mes["value"])
+                                await aplicar_parametros_lista(page_b, otros_params)
+                                salario = await leer_salario_total_bolsillo(page_b)
 
-                                    cur_y, cur_m = siguiente_mes(cur_y, cur_m)
+                                if paso == 0:
+                                    salario_inicial_prop = salario
+                                elif limite_siguiente is None and cur_y > inicio[0] and salario == salario_inicial_prop:
+                                    break
 
-                            elif inicio is not None:
-                                await aplicar_parametros_lista(page, otros_params)
-                                salario = await leer_salario_total_bolsillo(page)
-                                cur_y, cur_m = inicio
                                 nombre_mes = NOMBRES_MESES[cur_m]
                                 sort_key = f"{cur_y:04d}-{cur_m:02d}"
                                 registro = {
-                                    "orden_dom": idx * 100,
-                                    "propuesta": prop_text,
+                                    "orden_dom": idx * 100 + paso,
+                                    "propuesta": f"{prop_text} ({nombre_mes})",
                                     "fecha": f"{nombre_mes} {cur_y}",
                                     "sort_key": sort_key,
                                     "tiene_fecha": True,
                                     "salario": salario,
                                     "salario_real": calcular_real_puntual(salario, sort_key)
                                 }
-                                async with lock_res:
-                                    resultados.append(registro)
-                                    progreso_contador += 1
-                                    p_actual = min(progreso_contador, total)
+                                resultados.append(registro)
                                 if sort_key >= "2023-01":
-                                    await cola_eventos.put({
+                                    ev = {
                                         "type": "progress",
-                                        "idx": p_actual,
+                                        "idx": idx,
                                         "total": total,
                                         "registro": registro
-                                    })
+                                    }
+                                    yield f"data: {json.dumps(ev)}\n\n"
 
-                        except Exception as exc:
-                            async with lock_res:
-                                progreso_contador += 1
-                                p_actual = min(progreso_contador, total)
-                            await cola_eventos.put({
-                                "type": "error",
-                                "idx": p_actual,
-                                "total": total,
+                                cur_y, cur_m = siguiente_mes(cur_y, cur_m)
+
+                        elif inicio is not None:
+                            await aplicar_parametros_lista(page_b, otros_params)
+                            salario = await leer_salario_total_bolsillo(page_b)
+                            cur_y, cur_m = inicio
+                            nombre_mes = NOMBRES_MESES[cur_m]
+                            sort_key = f"{cur_y:04d}-{cur_m:02d}"
+                            registro = {
+                                "orden_dom": idx * 100,
                                 "propuesta": prop_text,
-                                "error": str(exc)
-                            })
-                finally:
-                    await ctx.close()
+                                "fecha": f"{nombre_mes} {cur_y}",
+                                "sort_key": sort_key,
+                                "tiene_fecha": True,
+                                "salario": salario,
+                                "salario_real": calcular_real_puntual(salario, sort_key)
+                            }
+                            resultados.append(registro)
+                            if sort_key >= "2023-01":
+                                ev = {
+                                    "type": "progress",
+                                    "idx": idx,
+                                    "total": total,
+                                    "registro": registro
+                                }
+                                yield f"data: {json.dumps(ev)}\n\n"
 
-            num_workers = min(CONCURRENCIA, max(1, total))
-            tareas_workers = [asyncio.create_task(worker()) for _ in range(num_workers)]
+                    except Exception as exc:
+                        ev_err = {
+                            "type": "error",
+                            "idx": idx,
+                            "total": total,
+                            "propuesta": prop_text,
+                            "error": str(exc)
+                        }
+                        yield f"data: {json.dumps(ev_err)}\n\n"
 
-            async def esperar_workers():
-                await asyncio.gather(*tareas_workers)
-                await cola_eventos.put(None)
-
-            coordinador = asyncio.create_task(esperar_workers())
-
-            while True:
-                evento = await cola_eventos.get()
-                if evento is None:
-                    break
-                yield f"data: {json.dumps(evento)}\n\n"
-
-            await coordinador
+            finally:
+                for obj, fn in ((page_b, "close"), (browser_b, "close"), (pw_b, "stop")):
+                    if obj is not None:
+                        try:
+                            await getattr(obj, fn)()
+                        except Exception:
+                            pass
 
             resultados_ordenados = sorted(
                 resultados,
