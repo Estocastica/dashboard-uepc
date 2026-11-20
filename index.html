@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extractor Dinámico UEPC - Salarios Reales y Casos Testigo</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --border: #cbd5e1;
+            --primary: #1e40af;
+            --primary-soft: #eff6ff;
+            --secondary: #475569;
+            --success: #15803d;
+            --danger: #b91c1c;
+            --text: #0f172a;
+            --muted: #64748b;
+        }
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+        body { background: var(--bg); color: var(--text); margin: 0; padding: 24px; }
+        .container { max-width: 1220px; margin: 0 auto; display: grid; gap: 20px; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+        h1 { margin: 0 0 6px 0; font-size: 1.38rem; }
+        h2 { margin: 0 0 14px 0; font-size: 1.06rem; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+        p.sub { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+        .tabs-nav {
+            display: flex; gap: 10px; background: #e2e8f0; padding: 6px; border-radius: 10px;
+            width: fit-content; flex-wrap: wrap;
+        }
+        .tab-btn {
+            background: transparent; color: var(--secondary); border: none; border-radius: 8px;
+            padding: 10px 18px; font-size: 0.94rem; font-weight: 700; cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .tab-btn:hover { background: rgba(255,255,255,0.6); color: var(--text); }
+        .tab-btn.active {
+            background: var(--card); color: var(--primary);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+        }
+        .tab-panel { display: none; gap: 20px; }
+        .tab-panel.active { display: grid; }
+
+        .presets-bar {
+            display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;
+            padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;
+            align-items: center;
+        }
+        .presets-label { font-size: 0.84rem; font-weight: 700; color: var(--secondary); margin-right: 4px; }
+        .preset-pill {
+            background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 999px;
+            padding: 6px 12px; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+        }
+        .preset-pill:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+        .preset-pill.selected { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+        .grid-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+        .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+        .field-check { flex-direction: row; align-items: center; gap: 8px; padding-top: 22px; }
+        label {
+            font-size: 0.85rem; font-weight: 600; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        select, input[type="text"], input[type="number"] {
+            padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; background: #fff; width: 100%;
+        }
+        input.campo-bloqueado, select.campo-bloqueado {
+            background: #f1f5f9;
+            color: #475569;
+            border-style: dashed;
+            cursor: not-allowed;
+        }
+        .field-help {
+            font-size: 0.76rem;
+            color: #b45309;
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            border-radius: 5px;
+            padding: 4px 8px;
+            line-height: 1.35;
+        }
+        .field-help-ok {
+            font-size: 0.76rem;
+            color: #0f766e;
+            background: #f0fdfa;
+            border: 1px solid #99f6e4;
+            border-radius: 5px;
+            padding: 4px 8px;
+            line-height: 1.35;
+        }
+        .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+        button.action-btn {
+            background: var(--primary); color: #fff; border: none; border-radius: 6px;
+            padding: 10px 18px; font-size: 0.92rem; font-weight: 600; cursor: pointer;
+        }
+        button.sec { background: var(--secondary); }
+        button.batch { background: #0f766e; }
+        button.csv { background: var(--success); padding: 7px 14px; font-size: 0.85rem; }
+        button.action-btn:hover { opacity: 0.92; }
+        button.action-btn:disabled { background: #94a3b8; cursor: not-allowed; }
+        .debug-box {
+            background: #0f172a; color: #e2e8f0; font-family: ui-monospace, monospace;
+            font-size: 0.82rem; padding: 14px; border-radius: 6px; max-height: 170px;
+            overflow-y: auto; line-height: 1.45;
+        }
+        .log-ok { color: #4ade80; }
+        .log-err { color: #f87171; }
+        .log-info { color: #38bdf8; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        th { background: #f1f5f9; font-weight: 600; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .badge-warn { font-size: 0.78rem; color: #b45309; background: #fef3c7; padding: 2px 6px; border-radius: 4px; }
+        .badge-est { font-size: 0.75rem; color: #1d4ed8; background: #dbeafe; padding: 2px 6px; border-radius: 4px; }
+        .total-box {
+            margin-top: 18px; padding: 16px 20px; border-radius: 8px;
+            background: #fef2f2; border: 1px solid #fecaca;
+            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+        }
+        .total-box.positivo { background: #f0fdf4; border-color: #bbf7d0; }
+        .total-title { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+        .total-sub { font-size: 0.83rem; color: var(--muted); margin-top: 3px; }
+        .total-amount { font-size: 1.45rem; font-weight: 800; color: var(--danger); font-variant-numeric: tabular-nums; }
+        .total-box.positivo .total-amount { color: var(--success); }
+        .loss-val { color: var(--danger); font-weight: 600; }
+        .gain-val { color: var(--success); font-weight: 600; }
+        .note-box {
+            margin-top: 12px; padding: 10px 14px; background: #f8fafc; border-left: 3px solid var(--primary);
+            font-size: 0.84rem; color: var(--secondary); line-height: 1.45;
+        }
+
+        .caso-switcher {
+            display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+        }
+        .caso-tab {
+            padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+            background: #f8fafc; font-size: 0.85rem; font-weight: 700; cursor: pointer; color: var(--text);
+        }
+        .caso-tab.active {
+            background: var(--primary); color: #fff; border-color: var(--primary);
+        }
+        .perfil-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .chip {
+            background: var(--primary-soft); color: var(--primary); border: 1px solid #bfdbfe;
+            padding: 4px 10px; border-radius: 999px; font-size: 0.82rem; font-weight: 600;
+        }
+        .chip-uepc {
+            background: #dcfce7; color: #166534; border-color: #86efac;
+        }
+        .kpi-strip {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px;
+        }
+        .kpi-card {
+            background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px;
+        }
+        .kpi-label { font-size: 0.8rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+        .kpi-value { font-size: 1.32rem; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+        .kpi-sub { font-size: 0.8rem; color: var(--secondary); margin-top: 3px; }
+        .chart-wrapper { position: relative; height: 380px; width: 100%; }
+
+        .bienes-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 14px;
+        }
+        .bien-card {
+            border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            display: flex; flex-direction: column; justify-content: space-between; gap: 8px;
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+        }
+        .bien-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(15,23,42,0.08); }
+        .bien-header { display: flex; align-items: center; gap: 10px; }
+        .bien-emoji { font-size: 2rem; line-height: 1; }
+        .bien-name { font-weight: 700; font-size: 0.94rem; color: var(--text); }
+        .bien-qty { font-size: 1.5rem; font-weight: 800; color: var(--danger); font-variant-numeric: tabular-nums; }
+        .bien-qty.positivo { color: var(--success); }
+        .bien-unit { font-size: 0.84rem; font-weight: 600; color: var(--secondary); }
+        .bien-price-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 6px;
+            padding-top: 8px; border-top: 1px dashed var(--border); font-size: 0.8rem; color: var(--muted);
+        }
+        .bien-price-input {
+            width: 105px; padding: 4px 7px; font-size: 0.82rem; text-align: right;
+            border: 1px solid var(--border); border-radius: 5px;
+        }
+        .empty-lab {
+            text-align: center; padding: 36px 20px; color: var(--muted); font-size: 0.96rem;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="card">
+        <h1>📊 Monitor Salarial Docente UEPC — Poder Adquisitivo y Casos Testigo</h1>
+        <p class="sub">Serie mensual desde enero de 2023 a diciembre de 2026 en pesos constantes de octubre de 2026 (IPC y Canasta Región Pampeana — INDEC)</p>
+    </div>
+
+    <div class="tabs-nav">
+        <button class="tab-btn active" id="tab-btn-extractor" onclick="cambiarPestana('extractor')">📋 1. Extractor y Resumen Anual</button>
+        <button class="tab-btn" id="tab-btn-laboratorio" onclick="cambiarPestana('laboratorio')">🧪 2. Laboratorio de Casos Testigo</button>
+    </div>
+
+    <div id="panel-extractor" class="tab-panel active">
+        <div class="card">
+            <h2>1. Selección y Parámetros del Caso Testigo (Cargo 1 — Afiliado UEPC)</h2>
+
+            <div class="presets-bar">
+                <span class="presets-label">🎯 Casos testigo:</span>
+                <button type="button" class="preset-pill selected" id="pill-caso_1" onclick="aplicarPresetCaso('caso_1')">
+                    👩‍🏫 Maestra de grado sin antigüedad (22 hs)
+                </button>
+                <button type="button" class="preset-pill" id="pill-caso_2" onclick="aplicarPresetCaso('caso_2')">
+                    👩‍🏫 Maestra de grado 10 años antig. (22 hs)
+                </button>
+                <button type="button" class="preset-pill" id="pill-caso_3" onclick="aplicarPresetCaso('caso_3')">
+                    👨‍🏫 Profesor 31 hs (13910) — 10 años antig.
+                </button>
+                <button type="button" class="preset-pill" id="pill-caso_4" onclick="aplicarPresetCaso('caso_4')">
+                    🏫 Director de primera — 20 años antig.
+                </button>
+            </div>
+
+            <div id="loading-init">Consultando controles activos en el simulador de UEPC...</div>
+            <div id="form-container" class="grid-form" style="display:none;"></div>
+            <div class="actions" id="actions-bar" style="display:none;">
+                <button id="btn-ejecutar" class="action-btn" onclick="iniciarBarrido(null)">🚀 Analizar caso actual</button>
+                <button id="btn-lote" class="action-btn batch" onclick="ejecutarLoteCuatroCasos()">⚡ Analizar los 4 casos testigo</button>
+                <button id="btn-reset" class="action-btn sec" onclick="cargarEstadoDOM(true)">🔄 Reiniciar sesión</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>2. Depuración en Tiempo Real</h2>
+            <div style="margin-bottom: 8px; font-size: 0.9rem;">
+                <strong>Propuestas (2023–2026):</strong> <span id="stat-total">-</span> |
+                <strong>Procesadas:</strong> <span id="stat-proc">0</span> |
+                <strong>Errores:</strong> <span id="stat-err">0</span> |
+                <strong>Tiempo:</strong> <span id="stat-time">0.0 s</span> |
+                <strong>IPC Pampeana:</strong> <span id="stat-ipc">Cargando...</span>
+            </div>
+            <div id="debug-console" class="debug-box">Inicializando sesión...</div>
+        </div>
+
+        <div class="card" id="card-resumen-anual" style="display:none;">
+            <h2>
+                <span>3. Poder Adquisitivo Promedio Anual (Pesos constantes de Octubre 2026)</span>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button class="action-btn" style="padding:7px 14px; font-size:0.85rem;" onclick="cambiarPestana('laboratorio')">🧪 Ir al Laboratorio de Casos Testigo →</button>
+                    <button id="btn-csv-mensual" class="action-btn csv" onclick="descargarCSVMensual()">⬇️ Serie Mensual (CSV)</button>
+                </div>
+            </h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Año</th>
+                        <th class="num">Meses comp.</th>
+                        <th class="num">Salario promedio (pesos oct. 2026)</th>
+                        <th class="num">Índice (2023 = 100)</th>
+                        <th class="num">Var. vs. 2023</th>
+                        <th class="num">Pérdida mensual promedio vs. 2023</th>
+                        <th class="num">Pérdida anual (12 meses)</th>
+                    </tr>
+                </thead>
+                <tbody id="tabla-resumen-anual"></tbody>
+            </table>
+
+            <div id="bloque-perdida-total" class="total-box">
+                <div>
+                    <div class="total-title">Pérdida de poder adquisitivo total acumulada (2024 + 2025 + 2026)</div>
+                    <div class="total-sub" id="detalle-perdida-total">Suma de las pérdidas anuales de 2024, 2025 y 2026 (12 meses cada año) en pesos de octubre de 2026.</div>
+                </div>
+                <div class="total-amount" id="monto-perdida-total">$0,00</div>
+            </div>
+
+            <div class="note-box" id="nota-metodologia"></div>
+        </div>
+
+        <div class="card">
+            <h2>
+                <span>4. Historial Cronológico por Propuesta (Desde Enero 2023)</span>
+                <button id="btn-csv" class="action-btn csv" onclick="descargarCSV()" disabled>⬇️ Propuestas (CSV)</button>
+            </h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Propuesta</th>
+                        <th>Fecha</th>
+                        <th class="num">Salario de bolsillo</th>
+                        <th class="num">Salario en pesos de octubre de 2026</th>
+                    </tr>
+                </thead>
+                <tbody id="tabla-resultados">
+                    <tr><td colspan="4" style="color: #64748b;">Seleccione un caso testigo o configure los parámetros y presione analizar.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="panel-laboratorio" class="tab-panel">
+        <div class="card" id="lab-placeholder">
+            <div class="empty-lab">
+                <div style="font-size:2.4rem; margin-bottom:10px;">🧪</div>
+                <strong>Aún no hay casos testigo ejecutados</strong>
+                <p style="margin-top:6px;">Elige uno de los 4 casos testigo o presiona <strong>⚡ Analizar los 4 casos testigo</strong> en la primera pestaña para generar el gráfico evolutivo, la tabla comparativa y las equivalencias en bienes.</p>
+                <button class="action-btn" style="margin-top:10px;" onclick="cambiarPestana('extractor')">← Ir a ejecutar casos testigo</button>
+            </div>
+        </div>
+
+        <div id="lab-contenido" style="display:none; gap:20px;">
+            <div class="card">
+                <h2>⚖️ Tabla Comparativa de los 4 Casos Testigo (Afiliados UEPC — Sin extras, sin hijos, sin zona)</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Caso testigo</th>
+                            <th class="num">Prom. real 2023</th>
+                            <th class="num">Prom. real 2026 (est.)</th>
+                            <th class="num">Pérdida anual 2024</th>
+                            <th class="num">Pérdida anual 2025</th>
+                            <th class="num">Pérdida anual 2026</th>
+                            <th class="num">Pérdida total (2024–2026)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabla-comparativa-casos"></tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <h2>🧬 Detalle en Profundidad del Caso Seleccionado</h2>
+                <div class="caso-switcher" id="lab-caso-switcher"></div>
+                <div id="lab-perfil-chips" class="perfil-chips"></div>
+
+                <div class="kpi-strip" style="margin-top:16px;">
+                    <div class="kpi-card">
+                        <div class="kpi-label">📅 Promedio Base 2023</div>
+                        <div class="kpi-value" id="lab-kpi-2023">-</div>
+                        <div class="kpi-sub">Pesos de octubre 2026</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">📉 Promedio 2026 (est.)</div>
+                        <div class="kpi-value" id="lab-kpi-2026">-</div>
+                        <div class="kpi-sub" id="lab-kpi-var26">-</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">💸 Pérdida Acumulada (2024–2026)</div>
+                        <div class="kpi-value loss-val" id="lab-kpi-perdida">-</div>
+                        <div class="kpi-sub">36 meses vs. nivel real 2023</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">⚖️ Salarios 2023 perdidos</div>
+                        <div class="kpi-value loss-val" id="lab-kpi-sueldos">-</div>
+                        <div class="kpi-sub">Equivalente en sueldos promedio 2023</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📈 Evolución Mensual del Poder Adquisitivo Real (Enero 2023 – Diciembre 2026)</h2>
+                <p class="sub" style="margin-bottom:14px;">Expresado en pesos constantes de octubre de 2026 (IPC Región Pampeana). Puedes ver el caso activo junto a su línea base 2023 o comparar todos los casos ejecutados.</p>
+                <div class="chart-wrapper">
+                    <canvas id="grafico-poder-adquisitivo"></canvas>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>
+                    <span>🛒 Pérdida Acumulada (2024–2026) Convertida en Bienes Cotidianos</span>
+                    <span class="badge-est" id="lab-fuente-precios">Precios promedio Región Pampeana — INDEC (Oct. 2026)</span>
+                </h2>
+                <p class="sub">Unidades de bienes relevados por el INDEC que equivalen a la pérdida total acumulada en pesos de octubre de 2026 para el caso seleccionado. Puedes editar cualquier precio unitario.</p>
+                <div id="lab-bienes-grid" class="bienes-grid"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const CASOS_TESTIGO_DEFINIDOS = {
+        caso_1: {
+            id: 'caso_1',
+            tituloCorto: '1. Maestra grado s/ant. (22 hs)',
+            tituloCompleto: 'Maestra de grado sin extras sin antigüedad (22 hs) — Afiliada UEPC',
+            cargoKeywords: ['maestra de grado', 'maestro de grado', 'grado'],
+            horas: '22',
+            antiguedad: '0'
+        },
+        caso_2: {
+            id: 'caso_2',
+            tituloCorto: '2. Maestra grado 10a (22 hs)',
+            tituloCompleto: 'Maestra de grado sin extras con 10 años de antigüedad (22 hs) — Afiliada UEPC',
+            cargoKeywords: ['maestra de grado', 'maestro de grado', 'grado'],
+            horas: '22',
+            antiguedad: '10'
+        },
+        caso_3: {
+            id: 'caso_3',
+            tituloCorto: '3. Profesor 31 hs (13910) 10a',
+            tituloCompleto: 'Profesor con 31 horas (13910) 10 años de antigüedad — Afiliado UEPC',
+            cargoKeywords: ['13910', 'hora cátedra', 'hora catedra', 'profesor'],
+            horas: '31',
+            antiguedad: '10'
+        },
+        caso_4: {
+            id: 'caso_4',
+            tituloCorto: '4. Director 1ª 20a (s/extras)',
+            tituloCompleto: 'Director de primera 20 años de antigüedad (sin extras, sin hijos, sin zona) — Afiliado UEPC',
+            cargoKeywords: ['director de primera', 'director'],
+            horas: '22',
+            antiguedad: '20'
+        }
+    };
+
+    let casoActivoId = 'caso_1';
+    let resultadosPorCaso = {};
+    let estadoActual = null;
+    let valoresLocales = {};
+    let ultimosResultados = [];
+    let ultimaSerieMensual = [];
+    let ultimoResumenAnual = [];
+    let ultimoAnalisisCompleto = null;
+    let canastaBienesActual = [];
+    let perfilCasoTestigo = [];
+    let chartInstancia = null;
+    let timerInterval = null;
+
+    function esCargoHorasCatedraSeleccionado() {
+        if (!estadoActual) return false;
+        const cargoCtrl = estadoActual.controles.find(c => {
+            const lbl = (c.label || '').toLowerCase();
+            const idn = (c.id || '').toLowerCase();
+            return idn.includes('cargouno') || /^cargo$/i.test(lbl.trim());
+        });
+        if (!cargoCtrl || !cargoCtrl.options) return false;
+        const selOpt = cargoCtrl.options.find(o => o.value === cargoCtrl.value || o.selected);
+        const txt = ((selOpt ? selOpt.text : '') || '').toLowerCase();
+        return /13910|hora\s*c[aá]tedra|c[aá]tedra/i.test(txt);
+    }
+
+    function esControlHoras(ctrl) {
+        const lbl = (ctrl.label || '').toLowerCase();
+        const idn = (ctrl.id || '').toLowerCase();
+        return (/n[°ºo]?\s*horas|^horas$/i.test(lbl) || idn.includes('horasuno'))
+            && !idn.includes('jornada')
+            && !idn.includes('prolongacion');
+    }
+
+    function cambiarPestana(nombre) {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        document.getElementById(`tab-btn-${nombre}`).classList.add('active');
+        document.getElementById(`panel-${nombre}`).classList.add('active');
+        if (nombre === 'laboratorio' && Object.keys(resultadosPorCaso).length > 0) {
+            renderizarLaboratorio();
+        }
+    }
+
+    function logDebug(msg, tipo = 'info') {
+        const box = document.getElementById('debug-console');
+        const line = document.createElement('div');
+        line.className = tipo === 'ok' ? 'log-ok' : (tipo === 'err' ? 'log-err' : 'log-info');
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function setControlesHabilitados(habilitado) {
+        const permiteEditarHoras = habilitado && esCargoHorasCatedraSeleccionado();
+        document.querySelectorAll('#form-container select, #form-container input, #actions-bar button, .preset-pill').forEach(el => {
+            if (el.dataset && el.dataset.esHoras === '1') {
+                el.disabled = !permiteEditarHoras;
+            } else {
+                el.disabled = !habilitado;
+            }
+        });
+    }
+
+    function marcarPillActiva(casoId) {
+        document.querySelectorAll('.preset-pill').forEach(p => p.classList.remove('selected'));
+        const pill = document.getElementById(`pill-${casoId}`);
+        if (pill) pill.classList.add('selected');
+    }
+
+    async function aplicarPresetCaso(casoId, sinLog = false) {
+        casoActivoId = casoId;
+        marcarPillActiva(casoId);
+        const def = CASOS_TESTIGO_DEFINIDOS[casoId];
+        if (!def || !estadoActual) return;
+
+        const controles = estadoActual.controles.filter(c => !c.is_propuesta);
+        let cargoSeleccionado = null;
+
+        for (const ctrl of controles) {
+            const lbl = (ctrl.label || '').toLowerCase();
+            const idn = (ctrl.id || '').toLowerCase();
+            if (idn.includes('cargouno') || /^cargo$/i.test(lbl.trim())) {
+                if (ctrl.tag === 'select' && ctrl.options && ctrl.options.length > 0) {
+                    const matchOpt = ctrl.options.find(o => {
+                        const t = o.text.toLowerCase();
+                        return def.cargoKeywords.some(kw => t.includes(kw));
+                    });
+                    if (matchOpt) {
+                        cargoSeleccionado = matchOpt;
+                        await enviarInteraccion(ctrl.id, 'select', matchOpt.value, true);
+                    }
+                }
+            }
+        }
+
+        const esHoraCatedra = esCargoHorasCatedraSeleccionado();
+        const controlesActuales = estadoActual.controles.filter(c => !c.is_propuesta);
+
+        for (const ctrl of controlesActuales) {
+            const lbl = (ctrl.label || '').toLowerCase();
+            const idn = (ctrl.id || '').toLowerCase();
+            const el = document.getElementById(`dyn_${ctrl.id}`);
+            if (!el) continue;
+
+            if (idn.includes('afiliado') || lbl.includes('afiliad') || lbl.includes('uepc')) {
+                if (ctrl.tag === 'checkbox') {
+                    el.checked = true;
+                    valoresLocales[ctrl.id] = true;
+                } else if (ctrl.tag === 'select') {
+                    const optSi = Array.from(el.options).find(o => /^(s[íi]|afiliado)/i.test(o.text.trim()));
+                    if (optSi) {
+                        el.value = optSi.value;
+                        valoresLocales[ctrl.id] = optSi.value;
+                    }
+                }
+            } else if (idn.includes('antiguedad') || lbl.includes('antig')) {
+                if (ctrl.tag === 'select') {
+                    const optAnt = Array.from(el.options).find(o => {
+                        const t = o.text.trim();
+                        return new RegExp(`(^|\\s)${def.antiguedad}(\\s|$|a[ñn]|%)`, 'i').test(t) || t.startsWith(`${def.antiguedad} `);
+                    });
+                    if (optAnt) {
+                        el.value = optAnt.value;
+                        valoresLocales[ctrl.id] = optAnt.value;
+                    }
+                } else {
+                    el.value = def.antiguedad;
+                    valoresLocales[ctrl.id] = def.antiguedad;
+                }
+            } else if (esControlHoras(ctrl)) {
+                const horasFijadas = def.horas || '22';
+                if (ctrl.tag === 'select') {
+                    const optHr = Array.from(el.options).find(o => o.text.trim() === horasFijadas || o.value === horasFijadas);
+                    if (optHr) {
+                        el.value = optHr.value;
+                        valoresLocales[ctrl.id] = optHr.value;
+                    }
+                } else {
+                    el.value = horasFijadas;
+                    valoresLocales[ctrl.id] = horasFijadas;
+                }
+                el.disabled = !esHoraCatedra;
+                el.classList.toggle('campo-bloqueado', !esHoraCatedra);
+            } else if (idn.includes('jornadaextendida') || idn.includes('prolongacion') || idn.includes('hijos') || idn.includes('zona') || idn.includes('extension') || idn.includes('bonmin') || idn.includes('tardif') || idn.includes('comesp') || idn.includes('anexo')) {
+                if (ctrl.tag === 'checkbox') {
+                    el.checked = false;
+                    valoresLocales[ctrl.id] = false;
+                } else if (ctrl.tag === 'select') {
+                    const optCero = Array.from(el.options).find(o => /^(0|no|1\s*-\s*no|a\s*-\s*0%)/i.test(o.text.trim()) || o.value === '0');
+                    if (optCero) {
+                        el.value = optCero.value;
+                        valoresLocales[ctrl.id] = optCero.value;
+                    }
+                } else {
+                    el.value = '0';
+                    valoresLocales[ctrl.id] = '0';
+                }
+            }
+        }
+
+        if (!sinLog) {
+            const modoHorasTexto = esHoraCatedra ? 'editable (Horas Cátedra)' : 'bloqueado en 22 hs (solo editable en Horas Cátedra)';
+            logDebug(`Preset cargado: ${def.tituloCompleto}${cargoSeleccionado ? ` (${cargoSeleccionado.text})` : ''} — Nº Horas: ${def.horas || '22'} [${modoHorasTexto}]`, 'info');
+        }
+    }
+
+    function renderizarControlesDinamicos(estado) {
+        estadoActual = estado;
+        const container = document.getElementById('form-container');
+        container.innerHTML = '';
+
+        const propControl = estado.controles.find(c => c.is_propuesta);
+        if (propControl) {
+            const validas = propControl.options.filter(o => o.value && o.value !== '0' && o.value !== '-1' && !/seleccione/i.test(o.text));
+            document.getElementById('stat-total').textContent = `~${validas.filter(o => /202[3-6]/.test(o.text)).length || validas.length}`;
+        }
+
+        const esHoraCatedra = esCargoHorasCatedraSeleccionado();
+        const controlesCargo1 = estado.controles.filter(c => !c.is_propuesta);
+
+        controlesCargo1.forEach(ctrl => {
+            const div = document.createElement('div');
+            div.className = ctrl.tag === 'checkbox' ? 'field field-check' : 'field';
+            const esHora = esControlHoras(ctrl);
+
+            const label = document.createElement('label');
+            label.htmlFor = `dyn_${ctrl.id}`;
+            label.textContent = ctrl.label;
+            label.title = ctrl.label;
+
+            if (ctrl.tag === 'select') {
+                const sel = document.createElement('select');
+                sel.id = `dyn_${ctrl.id}`;
+                sel.dataset.realId = ctrl.id;
+                sel.dataset.tag = 'select';
+                if (esHora) {
+                    sel.dataset.esHoras = '1';
+                    if (!esHoraCatedra) {
+                        sel.disabled = true;
+                        sel.classList.add('campo-bloqueado');
+                    }
+                }
+
+                ctrl.options.forEach(opt => {
+                    const o = document.createElement('option');
+                    o.value = opt.value;
+                    o.textContent = opt.text;
+                    if (opt.selected) o.selected = true;
+                    sel.appendChild(o);
+                });
+
+                sel.addEventListener('change', () => enviarInteraccion(ctrl.id, 'select', sel.value));
+                div.appendChild(label);
+                div.appendChild(sel);
+
+            } else if (ctrl.tag === 'checkbox') {
+                const chk = document.createElement('input');
+                chk.type = 'checkbox';
+                chk.id = `dyn_${ctrl.id}`;
+                chk.dataset.realId = ctrl.id;
+                chk.dataset.tag = 'checkbox';
+                chk.checked = valoresLocales[ctrl.id] !== undefined ? Boolean(valoresLocales[ctrl.id]) : Boolean(ctrl.checked);
+
+                chk.addEventListener('change', () => enviarInteraccion(ctrl.id, 'checkbox', chk.checked));
+                div.appendChild(chk);
+                div.appendChild(label);
+
+            } else {
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.id = `dyn_${ctrl.id}`;
+                inp.dataset.realId = ctrl.id;
+                inp.dataset.tag = 'input';
+                inp.placeholder = 'Ingrese valor...';
+                const defPreset = CASOS_TESTIGO_DEFINIDOS[casoActivoId];
+                const valorInicial = valoresLocales[ctrl.id] !== undefined
+                    ? valoresLocales[ctrl.id]
+                    : (esHora ? ((defPreset && defPreset.horas) || '22') : (ctrl.value || ''));
+                inp.value = valorInicial;
+
+                if (esHora) {
+                    inp.dataset.esHoras = '1';
+                    if (!esHoraCatedra) {
+                        inp.disabled = true;
+                        inp.readOnly = true;
+                        inp.classList.add('campo-bloqueado');
+                    }
+                }
+
+                inp.addEventListener('input', () => {
+                    if (esHora && !esCargoHorasCatedraSeleccionado()) return;
+                    valoresLocales[ctrl.id] = inp.value;
+                });
+                inp.addEventListener('change', () => {
+                    if (esHora && !esCargoHorasCatedraSeleccionado()) return;
+                    valoresLocales[ctrl.id] = inp.value;
+                    enviarInteraccion(ctrl.id, 'input', inp.value);
+                });
+                div.appendChild(label);
+                div.appendChild(inp);
+            }
+
+            if (esHora) {
+                const nota = document.createElement('div');
+                if (esHoraCatedra) {
+                    nota.className = 'field-help-ok';
+                    nota.textContent = 'Cargo de Horas Cátedra: puedes modificar libremente la cantidad de horas.';
+                } else {
+                    nota.className = 'field-help';
+                    nota.textContent = 'Nota: En cargos que no son Horas Cátedra (ej. Maestra / Director) se mantiene en 22 hs y no es editable para evitar errores del simulador; solo se habilita al elegir Horas Cátedra.';
+                }
+                div.appendChild(nota);
+            }
+
+            container.appendChild(div);
+        });
+    }
+
+    async function cargarEstadoDOM(reset = false) {
+        try {
+            if (reset) valoresLocales = {};
+            setControlesHabilitados(false);
+            logDebug(reset ? 'Reiniciando sesión en el simulador oficial...' : 'Leyendo DOM inicial del simulador...', 'info');
+            const res = await fetch(`/api/estado-dom?reset=${reset}`);
+            const data = await res.json();
+
+            if (data.ipc_info) {
+                document.getElementById('stat-ipc').textContent =
+                    `${data.ipc_info.origen} (Oct 2026 = ${data.ipc_info.ipc_2026_10 || 'N/D'})`;
+            }
+            if (data.canasta_bienes && data.canasta_bienes.bienes) {
+                canastaBienesActual = data.canasta_bienes.bienes.map(b => ({ ...b }));
+                document.getElementById('lab-fuente-precios').textContent = data.canasta_bienes.origen;
+            }
+
+            document.getElementById('loading-init').style.display = 'none';
+            document.getElementById('form-container').style.display = 'grid';
+            document.getElementById('actions-bar').style.display = 'flex';
+
+            renderizarControlesDinamicos(data.estado);
+            await aplicarPresetCaso(casoActivoId, true);
+            setControlesHabilitados(true);
+            logDebug(`Controles del Cargo 1 sincronizados (${data.estado.controles.length - 1} campos).`, 'ok');
+        } catch (err) {
+            logDebug(`Error al consultar DOM: ${err.message}`, 'err');
+            setControlesHabilitados(true);
+        }
+    }
+
+    async function enviarInteraccion(id, tag, value, silencioso = false) {
+        try {
+            if (!silencioso) setControlesHabilitados(false);
+            const res = await fetch('/api/interactuar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, tag, value })
+            });
+            const data = await res.json();
+            renderizarControlesDinamicos(data.estado);
+            if (!silencioso) {
+                setControlesHabilitados(true);
+                logDebug('Parámetro aplicado correctamente.', 'ok');
+            }
+        } catch (err) {
+            if (!silencioso) {
+                logDebug(`Error en actualización dinámica: ${err.message}`, 'err');
+                setControlesHabilitados(true);
+            }
+        }
+    }
+
+    function recolectarParametrosActuales() {
+        const esHoraCatedra = esCargoHorasCatedraSeleccionado();
+        return estadoActual.controles
+            .filter(c => !c.is_propuesta)
+            .map(c => {
+                const el = document.getElementById(`dyn_${c.id}`);
+                if (!el) return null;
+                if (c.tag === 'select') {
+                    return {
+                        id: c.id,
+                        tag: 'select',
+                        label: c.label,
+                        value: el.value,
+                        text: el.options[el.selectedIndex] ? el.options[el.selectedIndex].text.trim() : ''
+                    };
+                } else if (c.tag === 'checkbox') {
+                    return { id: c.id, tag: 'checkbox', label: c.label, value: el.checked };
+                } else {
+                    const valFinal = (esControlHoras(c) && !esHoraCatedra)
+                        ? ((CASOS_TESTIGO_DEFINIDOS[casoActivoId] && CASOS_TESTIGO_DEFINIDOS[casoActivoId].horas) || '22')
+                        : el.value;
+                    return { id: c.id, tag: 'input', label: c.label, value: valFinal };
+                }
+            })
+            .filter(Boolean);
+    }
+
+    function ejecutarBarridoPromesa(casoId) {
+        return new Promise((resolve) => {
+            const propControl = estadoActual.controles.find(c => c.is_propuesta);
+            if (!propControl) {
+                resolve(null);
+                return;
+            }
+
+            const parametros = recolectarParametrosActuales();
+            const defCaso = CASOS_TESTIGO_DEFINIDOS[casoId] || {
+                id: casoId,
+                tituloCorto: 'Caso personalizado',
+                tituloCompleto: 'Caso testigo personalizado — Afiliado UEPC'
+            };
+
+            const chips = ['Afiliado UEPC', 'Sin extras', 'Sin hijos', 'Sin zona'];
+            parametros.forEach(p => {
+                if (p.tag === 'select' && p.value && p.value !== '0' && p.value !== '-1') {
+                    chips.push(`${p.label}: ${p.text}`);
+                } else if (p.tag === 'checkbox' && p.value) {
+                    chips.push(`${p.label}: Sí`);
+                } else if (p.tag === 'input' && String(p.value).trim() !== '' && String(p.value).trim() !== '0') {
+                    chips.push(`${p.label}: ${p.value}`);
+                }
+            });
+            perfilCasoTestigo = chips;
+
+            document.getElementById('btn-csv').disabled = true;
+            document.getElementById('card-resumen-anual').style.display = 'none';
+            ultimosResultados = [];
+            ultimaSerieMensual = [];
+            ultimoResumenAnual = [];
+            ultimoAnalisisCompleto = null;
+            document.getElementById('tabla-resultados').innerHTML = '';
+            document.getElementById('stat-proc').textContent = '0';
+            document.getElementById('stat-err').textContent = '0';
+
+            const t0 = performance.now();
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                document.getElementById('stat-time').textContent = `${((performance.now() - t0) / 1000).toFixed(1)} s`;
+            }, 100);
+
+            const payload = encodeURIComponent(JSON.stringify({
+                propuesta_id: propControl.id,
+                parametros: parametros
+            }));
+
+            let errores = 0;
+            const evtSource = new EventSource(`/api/ejecutar-barrido?params=${payload}`);
+
+            evtSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'total') {
+                    document.getElementById('stat-total').textContent = data.total;
+                    logDebug(`[${defCaso.tituloCorto}] Consultando ${data.total} propuestas (2023–2026)...`, 'info');
+                } else if (data.type === 'progress') {
+                    document.getElementById('stat-proc').textContent = data.idx;
+                    const r = data.registro;
+                    agregarFilaTabla(r);
+                } else if (data.type === 'error') {
+                    errores++;
+                    document.getElementById('stat-proc').textContent = data.idx;
+                    document.getElementById('stat-err').textContent = errores;
+                    logDebug(`[${defCaso.tituloCorto}] FALLO en "${data.propuesta}": ${data.error}`, 'err');
+                } else if (data.type === 'done') {
+                    evtSource.close();
+                    clearInterval(timerInterval);
+
+                    ultimoAnalisisCompleto = data;
+                    ultimosResultados = data.resultados || [];
+                    ultimaSerieMensual = data.serie_mensual || [];
+                    ultimoResumenAnual = data.resumen_anual || [];
+
+                    if (data.canasta_bienes && data.canasta_bienes.bienes && !canastaBienesActual.length) {
+                        canastaBienesActual = data.canasta_bienes.bienes.map(b => ({ ...b }));
+                    }
+
+                    const tbody = document.getElementById('tabla-resultados');
+                    tbody.innerHTML = '';
+                    ultimosResultados.forEach(r => agregarFilaTabla(r));
+                    document.getElementById('btn-csv').disabled = ultimosResultados.length === 0;
+
+                    renderizarResumenAnual(data);
+
+                    resultadosPorCaso[casoId] = {
+                        def: defCaso,
+                        analisis: data,
+                        perfil: [...chips]
+                    };
+
+                    renderizarLaboratorio();
+                    const primerFecha = ultimosResultados.length ? ultimosResultados[0].fecha : 'sin datos';
+                    logDebug(`[${defCaso.tituloCorto}] Listo en ${((performance.now() - t0) / 1000).toFixed(1)} s (desde ${primerFecha}) — Pérdida 2024–2026: ${data.perdida_total_2024_2026}`, 'ok');
+                    resolve(data);
+                }
+            };
+
+            evtSource.onerror = () => {
+                evtSource.close();
+                clearInterval(timerInterval);
+                logDebug(`[${defCaso.tituloCorto}] Error de conexión en el barrido.`, 'err');
+                resolve(null);
+            };
+        });
+    }
+
+    async function iniciarBarrido(casoIdOverride = null) {
+        if (!estadoActual) return;
+        const targetCaso = casoIdOverride || casoActivoId;
+        setControlesHabilitados(false);
+        document.getElementById('debug-console').innerHTML = '';
+        await ejecutarBarridoPromesa(targetCaso);
+        setControlesHabilitados(true);
+    }
+
+    async function ejecutarLoteCuatroCasos() {
+        if (!estadoActual) return;
+        setControlesHabilitados(false);
+        document.getElementById('debug-console').innerHTML = '';
+        logDebug('Iniciando barrido secuencial de los 4 casos testigo (Afiliados UEPC)...', 'info');
+
+        for (const id of ['caso_1', 'caso_2', 'caso_3', 'caso_4']) {
+            await aplicarPresetCaso(id, true);
+            await ejecutarBarridoPromesa(id);
+        }
+
+        setControlesHabilitados(true);
+        logDebug('¡Los 4 casos testigo fueron analizados! Puedes revisarlos en el Laboratorio de Casos Testigo.', 'ok');
+        cambiarPestana('laboratorio');
+    }
+
+    function agregarFilaTabla(r) {
+        const tbody = document.getElementById('tabla-resultados');
+        const tr = document.createElement('tr');
+        const fechaHtml = r.tiene_fecha
+            ? r.fecha
+            : `<span class="badge-warn">${r.fecha}</span>`;
+
+        tr.innerHTML = `
+            <td>${r.propuesta}</td>
+            <td>${fechaHtml}</td>
+            <td class="num">${r.salario}</td>
+            <td class="num"><strong>${r.salario_real || 'N/D'}</strong></td>
+        `;
+        tbody.appendChild(tr);
+    }
+
+    function renderizarResumenAnual(data) {
+        const card = document.getElementById('card-resumen-anual');
+        const tbody = document.getElementById('tabla-resumen-anual');
+        tbody.innerHTML = '';
+
+        (data.resumen_anual || []).forEach(fila => {
+            const tr = document.createElement('tr');
+            const varTexto = fila.variacion_pct_vs_2023 !== null
+                ? `${fila.variacion_pct_vs_2023 > 0 ? '+' : ''}${fila.variacion_pct_vs_2023.toFixed(2)}%`
+                : 'N/D';
+            const clasePerdida = (fila.perdida_mensual_num !== null && fila.perdida_mensual_num > 0)
+                ? 'loss-val'
+                : ((fila.perdida_mensual_num !== null && fila.perdida_mensual_num < 0) ? 'gain-val' : '');
+
+            tr.innerHTML = `
+                <td><strong>${fila.anio}</strong> ${fila.anio === 2026 ? '<span class="badge-est">Nov-Dic est. 3%</span>' : ''}</td>
+                <td class="num">${fila.meses_computados} / 12</td>
+                <td class="num"><strong>${fila.promedio_real}</strong></td>
+                <td class="num">${fila.indice_2023_100 !== null ? fila.indice_2023_100.toFixed(2) : 'N/D'}</td>
+                <td class="num ${clasePerdida}">${varTexto}</td>
+                <td class="num ${clasePerdida}">${fila.perdida_mensual}</td>
+                <td class="num ${clasePerdida}"><strong>${fila.perdida_anual_12m}</strong></td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        const totalBox = document.getElementById('bloque-perdida-total');
+        const montoEl = document.getElementById('monto-perdida-total');
+        montoEl.textContent = data.perdida_total_2024_2026 || '$0,00';
+
+        if ((data.perdida_total_2024_2026_num || 0) <= 0) {
+            totalBox.classList.add('positivo');
+        } else {
+            totalBox.classList.remove('positivo');
+        }
+
+        const p24 = (data.resumen_anual.find(x => x.anio === 2024) || {}).perdida_anual_12m || '$0,00';
+        const p25 = (data.resumen_anual.find(x => x.anio === 2025) || {}).perdida_anual_12m || '$0,00';
+        const p26 = (data.resumen_anual.find(x => x.anio === 2026) || {}).perdida_anual_12m || '$0,00';
+        document.getElementById('detalle-perdida-total').textContent =
+            `Desglose: 2024 (${p24}) + 2025 (${p25}) + 2026 (${p26}) en pesos constantes de octubre de 2026.`;
+
+        const info = data.ipc_info || {};
+        document.getElementById('nota-metodologia').innerHTML =
+            `<strong>Metodología y notas del simulador:</strong> Serie mensual continua enero 2023 – diciembre 2026 completada por arrastre del último salario vigente en meses sin acuerdo paritario. Deflactada con IPC Región Pampeana (${info.origen || 'INDEC'}, base oct. 2026 = ${info.ipc_2026_10 || 'N/D'}), proyectando noviembre (${info.ipc_2026_11_est || 'N/D'}) y diciembre 2026 (${info.ipc_2026_12_est || 'N/D'}) con una inflación del 3,0% mensual. <em>Nota sobre Nº Horas:</em> el campo de horas se mantiene bloqueado en 22 hs para cargos que no son Horas Cátedra (Maestra / Director) y solo se habilita para edición en cargos de Horas Cátedra (ej. 13910).`;
+
+        card.style.display = 'block';
+    }
+
+    function seleccionarCasoEnLaboratorio(casoId) {
+        if (!resultadosPorCaso[casoId]) return;
+        casoActivoId = casoId;
+        renderizarLaboratorio();
+    }
+
+    function renderizarLaboratorio() {
+        const keys = Object.keys(resultadosPorCaso);
+        if (!keys.length) return;
+
+        if (!resultadosPorCaso[casoActivoId]) {
+            casoActivoId = keys[0];
+        }
+
+        document.getElementById('lab-placeholder').style.display = 'none';
+        document.getElementById('lab-contenido').style.display = 'grid';
+
+        const compBody = document.getElementById('tabla-comparativa-casos');
+        compBody.innerHTML = '';
+        ['caso_1', 'caso_2', 'caso_3', 'caso_4'].forEach(id => {
+            const item = resultadosPorCaso[id];
+            if (!item) return;
+            const resAnual = item.analisis.resumen_anual || [];
+            const r23 = resAnual.find(x => x.anio === 2023) || {};
+            const r24 = resAnual.find(x => x.anio === 2024) || {};
+            const r25 = resAnual.find(x => x.anio === 2025) || {};
+            const r26 = resAnual.find(x => x.anio === 2026) || {};
+
+            const tr = document.createElement('tr');
+            if (id === casoActivoId) tr.style.background = '#eff6ff';
+            tr.innerHTML = `
+                <td><button type="button" class="preset-pill ${id === casoActivoId ? 'selected' : ''}" onclick="seleccionarCasoEnLaboratorio('${id}')">${item.def.tituloCorto}</button></td>
+                <td class="num">${r23.promedio_real || 'N/D'}</td>
+                <td class="num">${r26.promedio_real || 'N/D'}</td>
+                <td class="num loss-val">${r24.perdida_anual_12m || 'N/D'}</td>
+                <td class="num loss-val">${r25.perdida_anual_12m || 'N/D'}</td>
+                <td class="num loss-val">${r26.perdida_anual_12m || 'N/D'}</td>
+                <td class="num loss-val"><strong>${item.analisis.perdida_total_2024_2026 || '$0,00'}</strong></td>
+            `;
+            compBody.appendChild(tr);
+        });
+
+        const switcher = document.getElementById('lab-caso-switcher');
+        switcher.innerHTML = '';
+        keys.forEach(id => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = `caso-tab ${id === casoActivoId ? 'active' : ''}`;
+            btn.textContent = resultadosPorCaso[id].def.tituloCorto;
+            btn.onclick = () => seleccionarCasoEnLaboratorio(id);
+            switcher.appendChild(btn);
+        });
+
+        const activo = resultadosPorCaso[casoActivoId];
+        const data = activo.analisis;
+
+        const chipsBox = document.getElementById('lab-perfil-chips');
+        chipsBox.innerHTML = '';
+        (activo.perfil || []).forEach(txt => {
+            const span = document.createElement('span');
+            span.className = `chip ${/uepc/i.test(txt) ? 'chip-uepc' : ''}`;
+            span.textContent = txt;
+            chipsBox.appendChild(span);
+        });
+
+        const r2023 = (data.resumen_anual || []).find(x => x.anio === 2023) || {};
+        const r2026 = (data.resumen_anual || []).find(x => x.anio === 2026) || {};
+        const perdidaTotal = data.perdida_total_2024_2026_num || 0;
+        const prom23Num = r2023.promedio_real_num || 0;
+        const sueldosPerdidos = prom23Num > 0 ? (perdidaTotal / prom23Num) : 0;
+
+        document.getElementById('lab-kpi-2023').textContent = r2023.promedio_real || 'N/D';
+        document.getElementById('lab-kpi-2026').textContent = r2026.promedio_real || 'N/D';
+        const var26 = r2026.variacion_pct_vs_2023;
+        document.getElementById('lab-kpi-var26').textContent = var26 !== null && var26 !== undefined
+            ? `${var26 > 0 ? '+' : ''}${var26.toFixed(2)}% vs. promedio 2023`
+            : 'Sin dato';
+        document.getElementById('lab-kpi-perdida').textContent = data.perdida_total_2024_2026 || '$0,00';
+        document.getElementById('lab-kpi-sueldos').textContent = `${sueldosPerdidos.toFixed(1)} sueldos`;
+
+        const serie = data.serie_mensual || [];
+        const labels = serie.map(m => m.periodo);
+        const valoresReales = serie.map(m => m.real_num);
+        const lineaBase2023 = serie.map(() => prom23Num || null);
+
+        const paletaOtros = ['#0f766e', '#d97706', '#7c3aed', '#db2777'];
+        const datasets = [
+            {
+                label: `${activo.def.tituloCorto} — Real (pesos oct. 2026)`,
+                data: valoresReales,
+                borderColor: '#1e40af',
+                backgroundColor: 'rgba(30, 64, 175, 0.12)',
+                borderWidth: 2.8,
+                pointRadius: 3.2,
+                pointHoverRadius: 6,
+                fill: true,
+                tension: 0.15
+            },
+            {
+                label: `Promedio 2023 (${activo.def.tituloCorto})`,
+                data: lineaBase2023,
+                borderColor: '#dc2626',
+                borderDash: [6, 6],
+                borderWidth: 2,
+                pointRadius: 0,
+                fill: false
+            }
+        ];
+
+        let colorIdx = 0;
+        keys.forEach(k => {
+            if (k === casoActivoId) return;
+            const otro = resultadosPorCaso[k];
+            const cHex = paletaOtros[colorIdx % paletaOtros.length];
+            colorIdx++;
+            datasets.push({
+                label: `${otro.def.tituloCorto} — Real`,
+                data: (otro.analisis.serie_mensual || []).map(m => m.real_num),
+                borderColor: cHex,
+                borderWidth: 1.7,
+                pointRadius: 1.5,
+                fill: false,
+                tension: 0.15
+            });
+        });
+
+        const ctx = document.getElementById('grafico-poder-adquisitivo').getContext('2d');
+        if (chartInstancia) {
+            chartInstancia.destroy();
+        }
+
+        chartInstancia = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const val = context.parsed.y;
+                                if (val === null || val === undefined) return '';
+                                return `${context.dataset.label}: $${Number(val).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                            },
+                            afterBody: function(items) {
+                                const idx = items[0].dataIndex;
+                                const punto = serie[idx];
+                                if (!punto) return '';
+                                return [
+                                    `Nominal vigente: ${punto.nominal}`,
+                                    `Acuerdo: ${punto.propuesta_vigente}`
+                                ];
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + Number(value).toLocaleString('es-AR', { maximumFractionDigits: 0 });
+                            }
+                        }
+                    },
+                    x: {
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 45
+                        }
+                    }
+                }
+            }
+        });
+
+        renderizarTarjetasBienes(perdidaTotal);
+    }
+
+    function renderizarTarjetasBienes(perdidaTotal) {
+        const grid = document.getElementById('lab-bienes-grid');
+        grid.innerHTML = '';
+
+        canastaBienesActual.forEach((bien, idx) => {
+            const precio = Number(bien.precio_oct_2026) || 1;
+            const cantidad = perdidaTotal / precio;
+            const esPositivo = cantidad <= 0;
+            const cantidadAbs = Math.abs(cantidad);
+
+            const card = document.createElement('div');
+            card.className = 'bien-card';
+            card.innerHTML = `
+                <div>
+                    <div class="bien-header">
+                        <span class="bien-emoji">${bien.emoji}</span>
+                        <span class="bien-name">${bien.nombre}</span>
+                    </div>
+                    <div style="margin-top:10px;">
+                        <div class="bien-qty ${esPositivo ? 'positivo' : ''}" id="bien-qty-${idx}">
+                            ${esPositivo ? '+' : ''}${cantidadAbs.toLocaleString('es-AR', { maximumFractionDigits: 1 })}
+                        </div>
+                        <div class="bien-unit">${bien.unidad} ${esPositivo ? 'ganados' : 'perdidos'} (2024–2026)</div>
+                    </div>
+                </div>
+                <div class="bien-price-row">
+                    <span>Precio oct. 2026 ($):</span>
+                    <input type="number" step="10" min="1" class="bien-price-input" value="${precio}" onchange="actualizarPrecioBien(${idx}, this.value)">
+                </div>
+            `;
+            grid.appendChild(card);
+        });
+    }
+
+    function actualizarPrecioBien(idx, nuevoPrecio) {
+        const val = parseFloat(nuevoPrecio);
+        if (!isNaN(val) && val > 0 && canastaBienesActual[idx]) {
+            canastaBienesActual[idx].precio_oct_2026 = val;
+            const activo = resultadosPorCaso[casoActivoId];
+            const perdidaTotal = activo ? (activo.analisis.perdida_total_2024_2026_num || 0) : 0;
+            renderizarTarjetasBienes(perdidaTotal);
+        }
+    }
+
+    function descargarCSV() {
+        if (!ultimosResultados.length) return;
+        const encabezado = [
+            'Propuesta',
+            'Fecha',
+            'Salario_de_bolsillo_nominal',
+            'Salario_nominal_num',
+            'Salario_pesos_oct_2026',
+            'Salario_real_oct_2026_num'
+        ];
+        const filas = ultimosResultados.map(r => [
+            `"${r.propuesta.replace(/"/g, '""')}"`,
+            `"${r.fecha}"`,
+            `"${r.salario}"`,
+            r.salario_nominal_num !== undefined ? r.salario_nominal_num : '',
+            `"${r.salario_real || 'N/D'}"`,
+            r.salario_real_num !== null && r.salario_real_num !== undefined ? r.salario_real_num : ''
+        ].join(';'));
+
+        const csvContent = '\uFEFF' + [encabezado.join(';'), ...filas].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `propuestas_uepc_nominal_y_real_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function descargarCSVMensual() {
+        if (!ultimaSerieMensual.length) return;
+        const encabezado = [
+            'Periodo',
+            'Anio',
+            'Mes',
+            'Fecha',
+            'Propuesta_vigente',
+            'Tipo_dato',
+            'IPC_Pampeana',
+            'Salario_nominal_num',
+            'Salario_real_oct_2026_num'
+        ];
+        const filas = ultimaSerieMensual.map(m => [
+            m.periodo,
+            m.anio,
+            m.mes,
+            `"${m.fecha}"`,
+            `"${m.propuesta_vigente.replace(/"/g, '""')}"`,
+            m.es_arrastre ? 'Arrastre_vigente' : 'Acuerdo_mes',
+            m.ipc !== null ? m.ipc : '',
+            m.nominal_num !== null ? m.nominal_num : '',
+            m.real_num !== null ? m.real_num : ''
+        ].join(';'));
+
+        const csvContent = '\uFEFF' + [encabezado.join(';'), ...filas].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `serie_mensual_real_uepc_2023_2026_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    cargarEstadoDOM(false);
+</script>
+</body>
+</html>
